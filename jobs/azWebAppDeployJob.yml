@@ -119,6 +119,8 @@ jobs:
             value: ${{ variable.value }}
     - name: deploymentSettings
       value: ''
+    - name: activeSettings
+      value: ''
     - ${{ each setting in parameters.appSettings }}:
         - ${{ if eq(setting.slot, true)}}:
           - name: "secrets_azDeploymentSlotSetting_${{ setting.name }}"
@@ -135,6 +137,7 @@ jobs:
         - ${{ if ne(setting.slot, true)}}:
           - name: "acDevSettings_${{ setting.name }}"
             value: $[ dependencies.Secret_Gathering.outputs['SetSecretVariables._${{ setting.name }}'] ]
+
   strategy:
     runOnce:
       deploy:
@@ -164,8 +167,7 @@ jobs:
               }
             }
             $stagingSettings = $stagingSettings | ConvertTo-Json -Depth 99 -Compress
-            Write-Host "##vso[task.setvariable variable=deploymentSettings;issecret=true]$stagingSettings"
-
+            Write-Host "##vso[task.setvariable variable=deploymentSettings]$stagingSettings"
           displayName: Set Slot Specific App Config
           env:
             ${{ each setting in parameters.appSettings }}:
@@ -173,7 +175,7 @@ jobs:
                 "secrets_azDeploymentSlotSetting_${{ setting.name }}": $(secrets_azDeploymentSlotSetting_${{ setting.name }})
               ${{ if ne(setting.slot, true)}}:
                 "secrets_${{ setting.name }}": $(secrets_${{ setting.name }})
-                    
+
         - task: DownloadPipelineArtifact@2
           displayName: Download App Binaries
           inputs:
@@ -188,7 +190,7 @@ jobs:
               pipeline: ${{ parameters.CIPipelineId }}
               runVersion: latestFromBranch
               runBranch: ${{ parameters.deployBranch }}
-          
+
         - task: AzureRmWebAppDeployment@4
           name: azureDeployment
           displayName: Deploy to ${{ parameters.slot }} Slot
@@ -200,23 +202,14 @@ jobs:
             SlotName: ${{ parameters.slot }}
             packageForLinux:  $(Pipeline.Workspace)/App/App.zip
 
-        - task: AzureCLI@2
+        - task: AzureAppServiceSettings@1
           displayName: Update ${{ parameters.slot }} Slot Settings
           inputs:
             azureSubscription: ${{ parameters.subscription }}
-            scriptType: pscore
-            scriptLocation: 'inlineScript'
-            inlineScript: |
-              $appSettingsD = ConvertFrom-Json '$(deploymentSettings)'
-              foreach ($setting in $appSettingsD)
-              {
-                 $key = $setting."name"
-                 $keyArray = $key.Split(":")
-                 $val = $setting."value"
-                 $formattedKey = [String]::Join(":", $keyArray)
-                 $formattedSetting = [String]::Join("=", $formattedKey, $val)
-                 az webapp config appsettings set -g ${{ parameters.resourceGroup }} -n ${{ parameters.appName }} --slot ${{ parameters.slot }} --output none --settings $formattedSetting
-              }           
+            appName: ${{ parameters.appName }}
+            resourceGroupName: ${{ parameters.resourceGroup }}
+            slotName: ${{ parameters.slot }}
+            appSettings: $(deploymentSettings)
 
       ${{ if parameters.runACTests }}:
         postRouteTraffic:
@@ -482,23 +475,13 @@ jobs:
                     ${{ if ne(setting.slot, true)}}:
                       "secrets_${{ setting.name }}": $(secrets_${{ setting.name }})
 
-              - task: AzureCLI@2
+              - task: AzureAppServiceSettings@1
                 displayName: Update Production Slot Settings
                 inputs:
                   azureSubscription: ${{ parameters.subscription }}
-                  scriptType: pscore
-                  scriptLocation: 'inlineScript'
-                  inlineScript: |
-                    $appSettingsD = ConvertFrom-Json '$(activeSettings)'
-                    foreach ($setting in $appSettingsD)
-                    {
-                       $key = $setting."name"
-                       $keyArray = $key.Split(":")
-                       $val = $setting."value"
-                       $formattedKey = [String]::Join(":", $keyArray)
-                       $formattedSetting = [String]::Join("=", $formattedKey, $val)
-                       az webapp config appsettings set -g ${{ parameters.resourceGroup }} -n ${{ parameters.appName }} --slot ${{ parameters.slot }} --output none --settings $formattedSetting
-                    }    
+                  appName: ${{ parameters.appName }}
+                  resourceGroupName: ${{ parameters.resourceGroup }}
+                  appSettings: $(activeSettings)
 
               - task: AzureAppServiceManage@0
                 displayName: Swap Slots
